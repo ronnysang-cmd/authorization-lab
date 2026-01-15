@@ -3,6 +3,8 @@
 from flask import Flask, make_response, jsonify, request, session
 from flask_migrate import Migrate
 from flask_restful import Api, Resource
+from random import randint, choice as rc
+from faker import Faker
 
 from models import db, Article, User
 
@@ -19,6 +21,51 @@ db.init_app(app)
 api = Api(app)
 
 class ClearSession(Resource):
+
+    def get(self):
+        """Clear database and reseed with test data"""
+        # Clear session
+        session['page_views'] = None
+        session['user_id'] = None
+        
+        # Clear database
+        Article.query.delete()
+        User.query.delete()
+        
+        # Seed users
+        fake = Faker()
+        users = []
+        usernames = []
+        for i in range(5):
+            username = fake.first_name()
+            while username in usernames:
+                username = fake.first_name()
+            usernames.append(username)
+            user = User(username=username)
+            users.append(user)
+        
+        db.session.add_all(users)
+        db.session.commit()
+        
+        # Seed articles
+        articles = []
+        for i in range(10):
+            content = fake.paragraph(nb_sentences=8)
+            preview = content[:25] + '...'
+            article = Article(
+                author=fake.name(),
+                title=fake.sentence(),
+                content=content,
+                preview=preview,
+                minutes_to_read=randint(1, 20),
+                is_member_only=True if i == 0 else rc([True, False, False])
+            )
+            articles.append(article)
+        
+        db.session.add_all(articles)
+        db.session.commit()
+        
+        return {}, 200
 
     def delete(self):
     
@@ -87,12 +134,25 @@ class CheckSession(Resource):
 class MemberOnlyIndex(Resource):
     
     def get(self):
-        pass
+        user_id = session.get('user_id')
+        if not user_id:
+            return {'message': 'Unauthorized'}, 401
+        
+        articles = [article.to_dict() for article in Article.query.filter(Article.is_member_only == True).all()]
+        return make_response(jsonify(articles), 200)
 
 class MemberOnlyArticle(Resource):
     
     def get(self, id):
-        pass
+        user_id = session.get('user_id')
+        if not user_id:
+            return {'message': 'Unauthorized'}, 401
+        
+        article = Article.query.filter(Article.id == id).first()
+        if not article or not article.is_member_only:
+            return {'message': 'Not found'}, 404
+        
+        return article.to_dict(), 200
 
 api.add_resource(ClearSession, '/clear', endpoint='clear')
 api.add_resource(IndexArticle, '/articles', endpoint='article_list')
